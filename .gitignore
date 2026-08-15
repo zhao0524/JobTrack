@@ -1,0 +1,16 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.suo
+*.user
+
+# Icon generator (helper only, not part of the extension)
+icons/generate-icons.html
+
+# If a build step is ever added
+dist/
+node_modules/

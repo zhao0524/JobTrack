@@ -6,6 +6,7 @@ import {
   deleteApplication,
   repairIndex,
   getAllApplications,
+  wipeAll,
 } from './src/storage.js';
 import { sha256 } from './src/util/hash.js';
 import { toCSV } from './src/util/csv.js';
@@ -84,6 +85,11 @@ async function handleMessage(msg, sender) {
         await saveApplication(app);
       }
       return { ok: true, count: apps.length };
+    }
+
+    case MSG.WIPE_ALL: {
+      await wipeAll();
+      return { ok: true };
     }
 
     case MSG.PAGE_DETECTED: {

@@ -1,16 +1,26 @@
 # Job Application Tracker — Chrome Extension
 
-Spec for Claude Code. Manifest V3, vanilla JS, no build step, no backend.
+Spec for Claude Code. Manifest V3, vanilla JS, no build step.
+
+> **Storage update:** applications were migrated off `chrome.storage.local` to a
+> **Supabase** (Postgres) backend, accessed via the PostgREST REST API over
+> `fetch` (no SDK, to stay build-free). Config (project URL + anon key) lives in
+> a gitignored `config.local.js`. Currently **no auth** — the table is protected
+> only by RLS with a permissive policy, i.e. anyone with the shipped anon key can
+> access it. Fine for personal/unpublished use; add auth before sharing. Sections
+> below have been updated to match; follow-up **prefs** still live in
+> `chrome.storage.local`.
 
 ## Goal
 
-Capture a job posting while I'm on the application page, and keep a local log of
-what I applied to and when. Job description text is the payload. Links are not
-stored because postings get taken down.
+Capture a job posting while I'm on the application page, and keep a log of what I
+applied to and when. Job description text is the payload. Links are not stored
+because postings get taken down.
 
 ## Non-goals
 
-- No server, no auth, no sync. Everything lives in `chrome.storage.local`.
+- No auth yet (single-user, personal). Data syncs to Supabase so it survives
+  reinstalls and is reachable across devices with the same config.
 - No storing posting URLs as the record of truth. Hostname only, for context.
 - No resume/cover letter management. That stays in Overleaf.
 - No auto-apply, no scraping behind logins beyond what the page already renders.
@@ -54,12 +64,12 @@ where injection breaks.
       │  - storage writes (single writer)             │
       │  - chrome.alarms for follow-up reminders      │
       └───────────────┬───────────────────────────────┘
-                      │
+                      │  src/storage.js -> src/supabase.js (fetch)
                       ▼
       ┌───────────────────────────────────────────────┐
-      │ chrome.storage.local                          │
-      │   apps:index  -> [ {id,title,company,...} ]   │
-      │   app:<id>    -> { ...full record, desc }     │
+      │ Supabase (Postgres) — public.applications     │
+      │   REST: {SUPABASE_URL}/rest/v1/applications   │
+      │   one row per application, RLS enabled        │
       └───────────────┬───────────────────────────────┘
                       │
                       ▼
@@ -79,8 +89,11 @@ panel and popup are both open.
 job-tracker/
 ├── manifest.json
 ├── background.js
+├── config.example.js       # template: Supabase URL + anon key (committed)
+├── config.local.js         # real values (gitignored)
 ├── src/
-│   ├── storage.js          # CRUD over chrome.storage.local
+│   ├── storage.js          # CRUD over Supabase; maps camelCase <-> snake_case
+│   ├── supabase.js         # thin PostgREST fetch wrapper, reads config.local.js
 │   ├── messages.js         # message type constants + typed helpers
 │   ├── scrape/
 │   │   ├── index.js        # adapter registry + fallback chain
@@ -111,8 +124,11 @@ and LinkedIn will otherwise eat the styling.
 
 ## Data model
 
+The app works in camelCase; `src/storage.js` maps to/from the snake_case DB
+columns so nothing else needs to know.
+
 ```js
-// app:<id>
+// application (in-app shape)
 {
   id: string,            // crypto.randomUUID()
   title: string,
@@ -127,18 +143,23 @@ and LinkedIn will otherwise eat the styling.
   createdAt: string,
   updatedAt: string
 }
-
-// apps:index  (lightweight, so the popup list renders without loading every description)
-[ { id, title, company, appliedAt, status, sourceHost, descriptionHash } ]
 ```
 
-Index and record are written in the same message handler. Keep them consistent;
-add an `repairIndex()` in options that rebuilds the index by scanning `app:*`
-keys if they ever drift.
+```sql
+-- public.applications (DB shape, snake_case)
+id uuid pk, title text, company text, location text, applied_at date,
+status text, description text, description_hash text, notes text,
+source_host text, created_at timestamptz, updated_at timestamptz
+-- indexes: applied_at desc (list order), description_hash (dupe check)
+```
 
-Storage budget: `chrome.storage.local` gives 10MB without `unlimitedStorage`.
-A description averages 4–8KB, so ~1000 applications fits fine. Do not request
-`unlimitedStorage`.
+There is no separate `apps:index` anymore — Supabase is the single source of
+truth. `getIndex()` is just a `SELECT` of the summary columns; `saveApplication()`
+is an upsert on `id`. `repairIndex()` is retained for message-API compatibility
+but is now a no-op that returns the current list.
+
+Storage budget: no longer bound by `chrome.storage.local`'s 10MB quota — Postgres
+handles the volume. Only follow-up **prefs** remain in `chrome.storage.local`.
 
 ## Scraping
 
@@ -179,10 +200,13 @@ adapter, or the URL path matches `/jobs?/`, `/careers/`, `/apply/`.
   "*://*.myworkdayjobs.com/*",
   "*://*.greenhouse.io/*",
   "*://*.lever.co/*",
-  "*://*.ashbyhq.com/*"
+  "*://*.ashbyhq.com/*",
+  "https://*.supabase.co/*"
 ],
 "optional_host_permissions": ["*://*/*"]
 ```
+
+`https://*.supabase.co/*` lets the service worker `fetch` the Supabase REST API.
 
 Declared content scripts only on the known boards. Everywhere else, capture runs
 through `activeTab` + `chrome.scripting.executeScript` triggered from the popup
@@ -234,8 +258,9 @@ Keyboard: `/` focuses search, `Esc` closes the panel, `Cmd/Ctrl+Enter` saves.
 - Keep a `fixtures/` folder with saved HTML from each board, and a small script
   that runs each adapter against its fixture. Selectors on these sites rot
   fast, and a fixture test tells me which adapter broke without opening a browser.
-- Verify storage quota handling: write 1000 synthetic records, confirm the popup
-  list still renders under 100ms.
+- Verify Supabase round-trips: saving a job inserts a row (check Table Editor),
+  the popup lists what's in the DB, and network/auth errors surface in the
+  service worker console rather than failing silently.
 
 ## Open questions
 

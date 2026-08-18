@@ -1,84 +1,90 @@
-const INDEX_KEY = 'apps:index';
+// Data access for job applications — backed by Supabase (PostgREST).
+// Public function signatures are unchanged from the old chrome.storage.local
+// version, so background.js and the UI don't need to know the backend moved.
+import { sbFetch } from './supabase.js';
 
-function appKey(id) {
-  return `app:${id}`;
+const TABLE = '/applications';
+
+// Columns the popup/options lists need (keeps list payloads small).
+const SUMMARY_COLS = 'id,title,company,applied_at,status,source_host,description_hash';
+
+// ── camelCase (app) ↔ snake_case (DB) mapping ───────────────────────────────
+function toRow(app) {
+  const row = {
+    id: app.id,
+    title: app.title ?? null,
+    company: app.company ?? null,
+    location: app.location ?? null,
+    applied_at: app.appliedAt || null,
+    status: app.status ?? null,
+    description: app.description ?? null,
+    description_hash: app.descriptionHash ?? null,
+    notes: app.notes ?? null,
+    source_host: app.sourceHost ?? null,
+    updated_at: new Date().toISOString(),
+  };
+  // Preserve an existing/imported createdAt; let the DB default it otherwise.
+  if (app.createdAt) row.created_at = app.createdAt;
+  return row;
 }
 
+function fromRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    title: row.title,
+    company: row.company,
+    location: row.location,
+    appliedAt: row.applied_at,
+    status: row.status,
+    description: row.description,
+    descriptionHash: row.description_hash,
+    notes: row.notes,
+    sourceHost: row.source_host,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+// ── CRUD ────────────────────────────────────────────────────────────────────
 export async function getIndex() {
-  const result = await chrome.storage.local.get(INDEX_KEY);
-  return result[INDEX_KEY] ?? [];
+  const rows = await sbFetch(
+    `${TABLE}?select=${SUMMARY_COLS}&order=applied_at.desc`
+  );
+  return (rows ?? []).map(fromRow);
 }
 
 export async function getApplication(id) {
-  const result = await chrome.storage.local.get(appKey(id));
-  return result[appKey(id)] ?? null;
+  const rows = await sbFetch(`${TABLE}?id=eq.${id}&select=*`);
+  return fromRow(rows?.[0]);
 }
 
 export async function saveApplication(app) {
-  const now = new Date().toISOString();
-  const record = {
-    ...app,
-    createdAt: app.createdAt ?? now,
-    updatedAt: now,
-  };
-
-  const index = await getIndex();
-  const existingIdx = index.findIndex(e => e.id === record.id);
-  const indexEntry = {
-    id: record.id,
-    title: record.title,
-    company: record.company,
-    appliedAt: record.appliedAt,
-    status: record.status,
-    sourceHost: record.sourceHost,
-    descriptionHash: record.descriptionHash,
-  };
-
-  if (existingIdx >= 0) {
-    index[existingIdx] = indexEntry;
-  } else {
-    index.unshift(indexEntry);
-  }
-
-  await chrome.storage.local.set({
-    [appKey(record.id)]: record,
-    [INDEX_KEY]: index,
+  const rows = await sbFetch(`${TABLE}?on_conflict=id`, {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+    body: toRow(app),
   });
-
-  return record;
+  return fromRow(rows?.[0]);
 }
 
 export async function deleteApplication(id) {
-  const index = await getIndex();
-  const newIndex = index.filter(e => e.id !== id);
-  await chrome.storage.local.remove(appKey(id));
-  await chrome.storage.local.set({ [INDEX_KEY]: newIndex });
-}
-
-export async function repairIndex() {
-  const all = await chrome.storage.local.get(null);
-  const entries = [];
-  for (const [key, val] of Object.entries(all)) {
-    if (!key.startsWith('app:')) continue;
-    entries.push({
-      id: val.id,
-      title: val.title,
-      company: val.company,
-      appliedAt: val.appliedAt,
-      status: val.status,
-      sourceHost: val.sourceHost,
-      descriptionHash: val.descriptionHash,
-    });
-  }
-  entries.sort((a, b) => new Date(b.appliedAt) - new Date(a.appliedAt));
-  await chrome.storage.local.set({ [INDEX_KEY]: entries });
-  return entries;
+  await sbFetch(`${TABLE}?id=eq.${id}`, { method: 'DELETE' });
 }
 
 export async function getAllApplications() {
-  const index = await getIndex();
-  const keys = index.map(e => appKey(e.id));
-  if (!keys.length) return [];
-  const result = await chrome.storage.local.get(keys);
-  return keys.map(k => result[k]).filter(Boolean);
+  const rows = await sbFetch(`${TABLE}?select=*&order=applied_at.desc`);
+  return (rows ?? []).map(fromRow);
+}
+
+// Delete every row (used by the options "Wipe All Data" button).
+// id is the primary key and never null, so this matches all rows.
+export async function wipeAll() {
+  await sbFetch(`${TABLE}?id=not.is.null`, { method: 'DELETE' });
+}
+
+// Supabase is the single source of truth, so there is no separate index to
+// rebuild. Kept for message-API compatibility; returns the current list.
+export async function repairIndex() {
+  return getIndex();
 }

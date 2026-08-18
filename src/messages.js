@@ -9,6 +9,7 @@ export const MSG = {
   REPAIR_INDEX: 'REPAIR_INDEX',
   EXPORT_JSON: 'EXPORT_JSON',
   IMPORT_JSON: 'IMPORT_JSON',
+  WIPE_ALL: 'WIPE_ALL',
 };
 
 export function send(type, payload = {}) {

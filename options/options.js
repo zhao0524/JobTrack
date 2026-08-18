@@ -71,7 +71,7 @@ document.getElementById('btn-repair').addEventListener('click', async () => {
 document.getElementById('btn-wipe').addEventListener('click', async () => {
   if (!confirm('This will permanently delete ALL tracked applications. Are you sure?')) return;
   if (!confirm('Really? This cannot be undone.')) return;
-  await chrome.storage.local.clear();
+  await send(MSG.WIPE_ALL);
   showStatus('All data wiped.');
   await loadStats();
 });

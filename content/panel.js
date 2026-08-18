@@ -24,7 +24,7 @@ export function createPanel(scraped, onSave, onClose) {
       align-items: center;
       justify-content: space-between;
       padding: 16px 20px;
-      background: #4f46e5;
+      background: #059669;
       color: #fff;
       flex-shrink: 0;
     }
@@ -42,7 +42,7 @@ export function createPanel(scraped, onSave, onClose) {
       background: #fff;
     }
     input:focus, select:focus, textarea:focus {
-      outline: 2px solid #4f46e5; outline-offset: 1px; border-color: transparent;
+      outline: 2px solid #059669; outline-offset: 1px; border-color: transparent;
     }
     textarea { resize: vertical; min-height: 180px; line-height: 1.5; }
     .footer {
@@ -53,10 +53,10 @@ export function createPanel(scraped, onSave, onClose) {
       flex-shrink: 0;
     }
     .btn-save {
-      flex: 1; padding: 10px; background: #4f46e5; color: #fff; border: none;
+      flex: 1; padding: 10px; background: #059669; color: #fff; border: none;
       border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer;
     }
-    .btn-save:hover { background: #4338ca; }
+    .btn-save:hover { background: #047857; }
     .btn-cancel {
       padding: 10px 16px; background: #f3f4f6; color: #374151; border: none;
       border-radius: 6px; font-size: 14px; cursor: pointer;

@@ -11,7 +11,7 @@ export function createPill(onClick) {
       display: flex;
       align-items: center;
       gap: 6px;
-      background: #4f46e5;
+      background: #059669;
       color: #fff;
       border: none;
       border-radius: 24px;
@@ -20,10 +20,10 @@ export function createPill(onClick) {
       font-family: system-ui, sans-serif;
       font-weight: 600;
       cursor: pointer;
-      box-shadow: 0 4px 16px rgba(79,70,229,0.4);
+      box-shadow: 0 4px 16px rgba(5,150,105,0.4);
       transition: background 0.15s, transform 0.1s;
     }
-    button:hover { background: #4338ca; transform: scale(1.04); }
+    button:hover { background: #047857; transform: scale(1.04); }
     button:active { transform: scale(0.97); }
     svg { width: 16px; height: 16px; fill: currentColor; flex-shrink: 0; }
   `;

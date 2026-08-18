@@ -91,7 +91,7 @@ async function handleMessage(msg, sender) {
       if (tabId) {
         tabJobState.set(tabId, true);
         chrome.action.setBadgeText({ text: 'NEW', tabId });
-        chrome.action.setBadgeBackgroundColor({ color: '#4f46e5', tabId });
+        chrome.action.setBadgeBackgroundColor({ color: '#059669', tabId });
       }
       return { ok: true };
     }

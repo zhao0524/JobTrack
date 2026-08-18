@@ -21,6 +21,7 @@ function toRow(app) {
     description_hash: app.descriptionHash ?? null,
     notes: app.notes ?? null,
     source_host: app.sourceHost ?? null,
+    season: app.season ?? null,
     updated_at: new Date().toISOString(),
   };
   // Preserve an existing/imported createdAt; let the DB default it otherwise.
@@ -41,6 +42,7 @@ function fromRow(row) {
     descriptionHash: row.description_hash,
     notes: row.notes,
     sourceHost: row.source_host,
+    season: row.season,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

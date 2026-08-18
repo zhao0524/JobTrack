@@ -65,6 +65,11 @@ async function handleMessage(msg, sender) {
       return { ok: true, app };
     }
 
+    case MSG.GET_ALL: {
+      const apps = await getAllApplications();
+      return { ok: true, apps };
+    }
+
     case MSG.REPAIR_INDEX: {
       const index = await repairIndex();
       return { ok: true, index };

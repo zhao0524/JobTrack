@@ -7,9 +7,7 @@ const STATUS_LABELS = {
 
 // Recruiting terms — kept in sync with the dashboard (options.js) so jobs
 // added from the popup group correctly by season there.
-const SEASON_TERMS = ['Winter', 'Spring', 'Summer', 'Fall'];
-const SEASON_YEARS = [2026, 2027, 2028];
-const SEASONS = SEASON_YEARS.flatMap(y => SEASON_TERMS.map(t => `${t} ${y}`));
+const SEASONS = ['Summer 2027', 'Winter 2027'];
 
 let allApps = [];
 let expandedId = null;
@@ -226,25 +224,48 @@ document.getElementById('btn-grab').addEventListener('click', async () => {
         if (sel.length > 200) {
           desc = normalizeText(sel);
         } else {
-          // density heuristic
-          const IGNORE = new Set(['nav','header','footer','aside','script','style','noscript']);
-          const cands = [...document.querySelectorAll('div, article, section, main')]
-            .filter(el => !IGNORE.has(el.tagName.toLowerCase()));
-          let best = null, bestScore = 0;
-          for (const el of cands) {
-            const t = el.innerText || '';
-            const links = [...el.querySelectorAll('a')].reduce((a,x)=>a+(x.innerText||'').length,0);
-            const score = t.length / (1 + links);
-            if (score > bestScore) { bestScore = score; best = el; }
+          // Prefer known ATS description containers (they keep real structure),
+          // then fall back to a text-density heuristic. Reading the live DOM this
+          // way preserves paragraphs and bullet lists.
+          const KNOWN = [
+            '[data-automation-id="jobPostingDescription"]', // Workday
+            '.jobs-description__content', '#job-details',    // LinkedIn
+            '.job__description', '#content',                 // Greenhouse
+            '[class*="descriptionText"]', '[class*="jobDescription"]', // Ashby / misc
+            '.section-wrapper',                              // Lever
+          ];
+          let target = null;
+          for (const selector of KNOWN) {
+            const el = document.querySelector(selector);
+            if (el && el.innerText && el.innerText.length > 200) { target = el; break; }
           }
-          desc = readDesc(best) || normalizeText(document.body.innerText.slice(0, 20000));
+          if (!target) {
+            const IGNORE = new Set(['nav','header','footer','aside','script','style','noscript']);
+            const cands = [...document.querySelectorAll('div, article, section, main')]
+              .filter(el => !IGNORE.has(el.tagName.toLowerCase()));
+            let bestScore = 0;
+            for (const el of cands) {
+              const t = el.innerText || '';
+              const links = [...el.querySelectorAll('a')].reduce((a,x)=>a+(x.innerText||'').length,0);
+              const score = t.length / (1 + links);
+              if (score > bestScore) { bestScore = score; target = el; }
+            }
+          }
+          desc = readDesc(target) || normalizeText(document.body.innerText.slice(0, 20000));
         }
+
+        // The JSON-LD description is often a pre-flattened single-line blob, so
+        // prefer whichever source preserves more structure (line breaks).
+        const jsonDesc = jsonLd?.description || '';
+        const description =
+          ((desc.match(/\n/g) || []).length >= (jsonDesc.match(/\n/g) || []).length)
+            ? desc : jsonDesc;
 
         return {
           title: jsonLd?.title || ogTitle || document.title || '',
           company: jsonLd?.company || '',
           location: jsonLd?.location || '',
-          description: jsonLd?.description || desc,
+          description: description || desc || jsonDesc,
           sourceHost: location.hostname,
         };
       },

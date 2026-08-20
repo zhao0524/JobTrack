@@ -192,14 +192,24 @@
       if (jsonLd.title) result.title = jsonLd.title;
       if (jsonLd.company) result.company = jsonLd.company;
       if (jsonLd.location) result.location = jsonLd.location;
-      if (jsonLd.description && !result.description) result.description = jsonLd.description;
     }
 
     if (!result.title) {
       const og = document.querySelector('meta[property="og:title"]');
       result.title = og ? og.content : document.title;
     }
-    if (!result.description) result.description = genericScrape(document);
+
+    // Description: prefer the site adapter (live DOM). Otherwise pick whichever of
+    // the generic live-DOM extraction and the JSON-LD text keeps more structure —
+    // the JSON-LD description is sometimes a pre-flattened single-line blob.
+    if (!result.description) {
+      const generic = genericScrape(document);
+      const jd = (jsonLd && jsonLd.description) || '';
+      result.description =
+        ((generic.match(/\n/g) || []).length >= (jd.match(/\n/g) || []).length)
+          ? generic : jd;
+    }
+
     result.sourceHost = location.hostname;
     return result;
   }

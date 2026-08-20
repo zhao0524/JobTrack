@@ -9,9 +9,7 @@ const STATUS_LABEL = {
 };
 const ACTIVE_STATUSES = ['applied', 'oa', 'interview'];
 
-const SEASON_TERMS = ['Winter', 'Spring', 'Summer', 'Fall'];
-const SEASON_YEARS = [2026, 2027, 2028];
-const SEASONS = SEASON_YEARS.flatMap(y => SEASON_TERMS.map(t => `${t} ${y}`));
+const SEASONS = ['Summer 2027', 'Winter 2027'];
 const UNASSIGNED = 'Unassigned';
 
 // Palette for company avatars (Outlook-ish varied circles, green-leaning).
@@ -99,14 +97,51 @@ document.getElementById('btn-wipe').addEventListener('click', async () => {
   showStatus('All data wiped.');
 });
 
-// ── Filters ─────────────────────────────────────────────────────────────────
-function initSeasonFilter() {
-  const sel = document.getElementById('season-filter');
-  sel.appendChild(new Option('All seasons', 'all'));
-  SEASONS.forEach(s => sel.appendChild(new Option(s, s)));
-  sel.appendChild(new Option(UNASSIGNED, UNASSIGNED));
-  sel.value = 'all';
-  sel.addEventListener('change', renderList);
+// ── Season rail (left column filter) ─────────────────────────────────────────
+let seasonFilter = 'all';
+
+function seasonCounts() {
+  const counts = {};
+  for (const app of allApps) {
+    const s = SEASONS.includes(app.season) ? app.season : UNASSIGNED;
+    counts[s] = (counts[s] || 0) + 1;
+  }
+  return counts;
+}
+
+function renderRail() {
+  const rail = document.getElementById('rail');
+  rail.textContent = '';
+
+  const title = document.createElement('div');
+  title.className = 'rail-title';
+  title.textContent = 'Terms';
+  rail.appendChild(title);
+
+  const counts = seasonCounts();
+  const items = [
+    { key: 'all', label: 'All applications', count: allApps.length },
+    ...SEASONS.map(s => ({ key: s, label: s, count: counts[s] || 0 })),
+    { key: UNASSIGNED, label: UNASSIGNED, count: counts[UNASSIGNED] || 0 },
+  ];
+
+  for (const it of items) {
+    const btn = document.createElement('button');
+    btn.className = 'rail-item' + (seasonFilter === it.key ? ' active' : '');
+    const label = document.createElement('span');
+    label.className = 'rail-label';
+    label.textContent = it.label;
+    const count = document.createElement('span');
+    count.className = 'rail-count';
+    count.textContent = it.count;
+    btn.append(label, count);
+    btn.addEventListener('click', () => {
+      seasonFilter = it.key;
+      renderRail();
+      renderList();
+    });
+    rail.appendChild(btn);
+  }
 }
 
 document.getElementById('search').addEventListener('input', renderList);
@@ -115,17 +150,17 @@ document.getElementById('search').addEventListener('input', renderList);
 async function loadData() {
   const res = await send(MSG.GET_ALL);
   allApps = res.apps || [];
+  renderRail();
   renderList();
   renderReader();
 }
 
 function filteredApps() {
-  const season = document.getElementById('season-filter').value;
   const query = document.getElementById('search').value.toLowerCase().trim();
   return allApps.filter(app => {
-    if (season !== 'all') {
-      const s = app.season || UNASSIGNED;
-      if (s !== season) return false;
+    if (seasonFilter !== 'all') {
+      const s = SEASONS.includes(app.season) ? app.season : UNASSIGNED;
+      if (s !== seasonFilter) return false;
     }
     if (query) {
       const hay = `${app.title || ''} ${app.company || ''}`.toLowerCase();
@@ -185,7 +220,7 @@ function renderList() {
   // Group by season, ordered SEASONS then Unassigned; newest applied first within.
   const groups = new Map();
   for (const app of apps) {
-    const s = app.season || UNASSIGNED;
+    const s = SEASONS.includes(app.season) ? app.season : UNASSIGNED;
     if (!groups.has(s)) groups.set(s, []);
     groups.get(s).push(app);
   }
@@ -416,6 +451,7 @@ function buildSeasonSelect(job) {
     const season = sel.value || null;
     await send(MSG.UPDATE_APPLICATION, { app: { id: job.id, season } });
     job.season = season;
+    renderRail();
     renderList();
     renderReader();
   });
@@ -457,6 +493,5 @@ async function refresh() {
   await Promise.all([loadStats(), loadData()]);
 }
 
-initSeasonFilter();
 loadPrefs();
 refresh();

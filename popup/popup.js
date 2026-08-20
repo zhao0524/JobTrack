@@ -5,6 +5,12 @@ const STATUS_LABELS = {
   offer: 'Offer', rejected: 'Rejected', ghosted: 'Ghosted',
 };
 
+// Recruiting terms — kept in sync with the dashboard (options.js) so jobs
+// added from the popup group correctly by season there.
+const SEASON_TERMS = ['Winter', 'Spring', 'Summer', 'Fall'];
+const SEASON_YEARS = [2026, 2027, 2028];
+const SEASONS = SEASON_YEARS.flatMap(y => SEASON_TERMS.map(t => `${t} ${y}`));
+
 let allApps = [];
 let expandedId = null;
 let editingId = null;
@@ -25,10 +31,14 @@ const fCompany = document.getElementById('f-company');
 const fLocation = document.getElementById('f-location');
 const fDate = document.getElementById('f-date');
 const fStatus = document.getElementById('f-status');
+const fSeason = document.getElementById('f-season');
 const fDesc = document.getElementById('f-desc');
 const fNotes = document.getElementById('f-notes');
 const fDupe = document.getElementById('f-dupe');
 const btnDelete = document.getElementById('btn-delete');
+
+// Populate the Term dropdown once.
+SEASONS.forEach(s => fSeason.appendChild(new Option(s, s)));
 
 async function loadApps() {
   const res = await send(MSG.GET_INDEX);
@@ -153,7 +163,38 @@ document.getElementById('btn-grab').addEventListener('click', async () => {
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: () => {
-        // Inline scraper — returns raw fields since we can't import modules here
+        // Inline scraper — returns raw fields since we can't import modules here.
+        // Keep this DOM→text logic in sync with content/content.js (extractFormatted)
+        // so bullet lists, indentation, and paragraphs survive the grab.
+        const BLOCK_TAGS = new Set(['P','DIV','SECTION','ARTICLE','UL','OL','LI','TABLE','TR','H1','H2','H3','H4','H5','H6','HEADER','FOOTER','BLOCKQUOTE','PRE','DD','DT']);
+        function normalizeText(s) {
+          return (s || '').split('\n').map((line) => {
+            const lead = line.match(/^[ \t]*/)[0];
+            const body = line.slice(lead.length).replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+$/, '');
+            return body ? lead + body : '';
+          }).join('\n').replace(/\n{3,}/g, '\n\n').replace(/^\s+|\s+$/g, '');
+        }
+        function extractFormatted(root) {
+          let out = '';
+          const walk = (node, depth) => {
+            node.childNodes.forEach((child) => {
+              if (child.nodeType === Node.TEXT_NODE) { out += child.textContent.replace(/\s+/g, ' '); return; }
+              if (child.nodeType !== Node.ELEMENT_NODE) return;
+              const tag = child.tagName;
+              if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT') return;
+              if (tag === 'BR') { out += '\n'; return; }
+              if (tag === 'LI') { out += '\n' + '  '.repeat(Math.max(0, depth - 1)) + '• '; walk(child, depth); return; }
+              const isList = tag === 'UL' || tag === 'OL';
+              if (BLOCK_TAGS.has(tag)) out += '\n';
+              walk(child, depth + (isList ? 1 : 0));
+              if (BLOCK_TAGS.has(tag)) out += '\n';
+            });
+          };
+          walk(root, 0);
+          return normalizeText(out);
+        }
+        const readDesc = (el) => (el ? extractFormatted(el) : '');
+
         function fromJsonLd(doc) {
           const scripts = [...doc.querySelectorAll('script[type="application/ld+json"]')];
           for (const s of scripts) {
@@ -167,7 +208,7 @@ document.getElementById('btn-grab').addEventListener('click', async () => {
                     company: item.hiringOrganization?.name || '',
                     location: item.jobLocation?.address?.addressLocality || '',
                     description: item.description
-                      ? new DOMParser().parseFromString(item.description, 'text/html').body.innerText.trim()
+                      ? readDesc(new DOMParser().parseFromString(item.description, 'text/html').body)
                       : '',
                   };
                 }
@@ -183,7 +224,7 @@ document.getElementById('btn-grab').addEventListener('click', async () => {
 
         let desc = '';
         if (sel.length > 200) {
-          desc = sel;
+          desc = normalizeText(sel);
         } else {
           // density heuristic
           const IGNORE = new Set(['nav','header','footer','aside','script','style','noscript']);
@@ -196,7 +237,7 @@ document.getElementById('btn-grab').addEventListener('click', async () => {
             const score = t.length / (1 + links);
             if (score > bestScore) { bestScore = score; best = el; }
           }
-          desc = best?.innerText?.trim() || document.body.innerText.slice(0, 20000);
+          desc = readDesc(best) || normalizeText(document.body.innerText.slice(0, 20000));
         }
 
         return {
@@ -225,6 +266,7 @@ function openAddForm(prefill = {}) {
   fLocation.value = prefill.location || '';
   fDate.value = new Date().toISOString().slice(0, 10);
   fStatus.value = 'applied';
+  fSeason.value = prefill.season || '';
   fDesc.value = prefill.description || '';
   fNotes.value = prefill.notes || '';
   fDupe.style.display = 'none';
@@ -244,6 +286,7 @@ async function openEditForm(id) {
   fLocation.value = app.location || '';
   fDate.value = app.appliedAt ? app.appliedAt.slice(0, 10) : '';
   fStatus.value = app.status || 'applied';
+  fSeason.value = app.season || '';
   fDesc.value = app.description || '';
   fNotes.value = app.notes || '';
   fDupe.style.display = 'none';
@@ -272,14 +315,28 @@ async function saveForm() {
     location: fLocation.value.trim(),
     appliedAt: fDate.value || new Date().toISOString().slice(0, 10),
     status: fStatus.value,
+    season: fSeason.value || null,
     description: fDesc.value.trim(),
     notes: fNotes.value.trim(),
   };
 
   const msgType = editingId ? MSG.UPDATE_APPLICATION : MSG.SAVE_APPLICATION;
-  const res = await send(msgType, { app });
+
+  let res;
+  try {
+    res = await send(msgType, { app });
+  } catch (err) {
+    showFormError(`Save failed: ${err.message}`);
+    return;
+  }
+
+  if (!res || res.error || res.ok === false) {
+    showFormError(`Save failed: ${res?.error || 'unknown error'}`);
+    return;
+  }
 
   if (res.dupe) {
+    fDupe.textContent = '⚠ This looks like a duplicate of an existing application.';
     fDupe.style.display = 'block';
     return;
   }
@@ -297,6 +354,12 @@ document.getElementById('btn-delete').addEventListener('click', async () => {
   closeForm();
   await loadApps();
 });
+
+function showFormError(msg) {
+  fDupe.textContent = msg;
+  fDupe.style.display = 'block';
+  console.error('[jobtrack]', msg);
+}
 
 function esc(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');

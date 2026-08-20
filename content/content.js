@@ -4,6 +4,62 @@
   if (window.__jobTrackLoaded) return;
   window.__jobTrackLoaded = true;
 
+  // ── Formatted text extraction ───────────────────────────────────────────────
+  // .innerText drops list bullets and indentation and leaves noisy blank runs.
+  // Walk the DOM ourselves so paragraphs, line breaks, and bullet lists survive.
+  const BLOCK_TAGS = new Set([
+    'P','DIV','SECTION','ARTICLE','UL','OL','LI','TABLE','TR',
+    'H1','H2','H3','H4','H5','H6','HEADER','FOOTER','BLOCKQUOTE','PRE','DD','DT',
+  ]);
+
+  function extractFormatted(root) {
+    let out = '';
+    const walk = (node, depth) => {
+      node.childNodes.forEach((child) => {
+        if (child.nodeType === Node.TEXT_NODE) {
+          out += child.textContent.replace(/\s+/g, ' ');
+          return;
+        }
+        if (child.nodeType !== Node.ELEMENT_NODE) return;
+        const tag = child.tagName;
+        if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT') return;
+        if (tag === 'BR') { out += '\n'; return; }
+        if (tag === 'LI') {
+          // Single newline before each item so bullets stay consecutive.
+          out += '\n' + '  '.repeat(Math.max(0, depth - 1)) + '• ';
+          walk(child, depth);
+          return;
+        }
+        const isList = tag === 'UL' || tag === 'OL';
+        if (BLOCK_TAGS.has(tag)) out += '\n';
+        walk(child, depth + (isList ? 1 : 0));
+        if (BLOCK_TAGS.has(tag)) out += '\n';
+      });
+    };
+    walk(root, 0);
+    return normalizeText(out);
+  }
+
+  function normalizeText(s) {
+    return (s || '')
+      .split('\n')
+      .map((line) => {
+        const lead = line.match(/^[ \t]*/)[0];        // keep leading indent (bullets)
+        const body = line.slice(lead.length)
+          .replace(/[ \t]{2,}/g, ' ')                  // collapse internal space runs
+          .replace(/[ \t]+$/, '');                     // strip trailing spaces
+        return body ? lead + body : '';                // drop whitespace-only lines
+      })
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')                       // collapse big blank gaps
+      .replace(/^\s+|\s+$/g, '');                       // trim whole string
+  }
+
+  // Extract a job description from an element (or return '' if missing).
+  function readDesc(el) {
+    return el ? extractFormatted(el) : '';
+  }
+
   // ── Scraping ──────────────────────────────────────────────────────────────
 
   function fromJsonLd(doc) {
@@ -19,7 +75,7 @@
               company: item.hiringOrganization?.name || '',
               location: item.jobLocation?.address?.addressLocality || '',
               description: item.description
-                ? new DOMParser().parseFromString(item.description, 'text/html').body.innerText.trim()
+                ? readDesc(new DOMParser().parseFromString(item.description, 'text/html').body)
                 : '',
             };
           }
@@ -42,7 +98,7 @@
           title: titleEl ? titleEl.innerText.trim() : '',
           company: companyEl ? companyEl.innerText.trim() : '',
           location: locationEl ? locationEl.innerText.trim() : '',
-          description: descEl ? descEl.innerText.trim() : '',
+          description: readDesc(descEl),
         };
       },
     },
@@ -55,7 +111,7 @@
           title: titleEl ? titleEl.innerText.trim() : '',
           company: '',
           location: locationEl ? locationEl.innerText.trim() : '',
-          description: descEl ? descEl.innerText.trim() : '',
+          description: readDesc(descEl),
         };
       },
     },
@@ -68,7 +124,7 @@
           title: titleEl ? titleEl.innerText.trim() : '',
           company: '',
           location: locationEl ? locationEl.innerText.trim() : '',
-          description: descEl ? descEl.innerText.trim() : '',
+          description: readDesc(descEl),
         };
       },
     },
@@ -81,7 +137,7 @@
           title: titleEl ? titleEl.innerText.trim() : '',
           company: '',
           location: locationEl ? locationEl.innerText.trim() : '',
-          description: sections.map(s => s.innerText.trim()).join('\n\n'),
+          description: sections.map(readDesc).filter(Boolean).join('\n\n'),
         };
       },
     },
@@ -94,7 +150,7 @@
           title: titleEl ? titleEl.innerText.trim() : '',
           company: '',
           location: locationEl ? locationEl.innerText.trim() : '',
-          description: descEl ? descEl.innerText.trim() : '',
+          description: readDesc(descEl),
         };
       },
     },
@@ -115,8 +171,8 @@
       const score = t.length / (1 + links);
       if (score > bestScore) { bestScore = score; best = el; }
     }
-    if (best && best.innerText.length > 300) return best.innerText.trim();
-    return doc.body.innerText.slice(0, 20000).trim();
+    if (best && best.innerText.length > 300) return readDesc(best);
+    return normalizeText(doc.body.innerText.slice(0, 20000));
   }
 
   function getAdapter() {
@@ -259,6 +315,12 @@
       onClose?.();
     }
 
+    function showSaveError(g, msg) {
+      const el = g('p-dupe');
+      el.textContent = msg;
+      el.style.display = 'block';
+    }
+
     async function save() {
       const app = {
         id: crypto.randomUUID(),
@@ -271,8 +333,20 @@
         notes: g('p-notes').value.trim(),
         sourceHost: location.hostname,
       };
-      const res = await chrome.runtime.sendMessage({ type: 'SAVE_APPLICATION', app });
-      if (res?.dupe) {
+      if (!contextValid()) {
+        showSaveError(g, 'Extension was updated — please refresh this page, then save again.');
+        return;
+      }
+      const res = await safeSend({ type: 'SAVE_APPLICATION', app });
+      if (!res) {
+        showSaveError(g, 'Could not save — please refresh this page and try again.');
+        return;
+      }
+      if (res.error) {
+        showSaveError(g, `Could not save: ${res.error}`);
+        return;
+      }
+      if (res.dupe) {
         g('p-dupe').style.display = 'block';
         return;
       }
@@ -296,9 +370,36 @@
   let panelOpen = false;
   let lastUrl = location.href;
 
+  // chrome.runtime.id becomes undefined once the extension is reloaded/updated
+  // while this content script keeps running ("Extension context invalidated").
+  function contextValid() {
+    return Boolean(chrome.runtime && chrome.runtime.id);
+  }
+
+  // Safe wrapper: never throws. Returns the response, or null when the context
+  // is gone (in which case we also tear down so we stop firing dead calls).
+  async function safeSend(msg) {
+    if (!contextValid()) {
+      teardown();
+      return null;
+    }
+    try {
+      return await chrome.runtime.sendMessage(msg);
+    } catch (_) {
+      teardown();
+      return null;
+    }
+  }
+
+  function teardown() {
+    try { navObserver.disconnect(); } catch (_) {}
+    pillInstance?.remove();
+    pillInstance = null;
+  }
+
   function init() {
-    if (!isJobPage()) return;
-    chrome.runtime.sendMessage({ type: 'PAGE_DETECTED' });
+    if (!contextValid() || !isJobPage()) return;
+    safeSend({ type: 'PAGE_DETECTED' });
     if (!pillInstance && !panelOpen) {
       pillInstance = createPill(openPanel);
     }
@@ -319,6 +420,7 @@
 
   // SPA navigation
   const navObserver = new MutationObserver(() => {
+    if (!contextValid()) { teardown(); return; }
     if (location.href !== lastUrl) {
       lastUrl = location.href;
       pillInstance?.remove();
